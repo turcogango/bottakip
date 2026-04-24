@@ -1,4 +1,3 @@
-import os
 import asyncio
 import requests
 from telegram import Update
@@ -6,16 +5,14 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ================= CONFIG =================
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = "BOT_TOKEN"
 
-TRX_ADDRESS = os.getenv("TRX_ADDRESS", "TDy4vHiBx9o6zwqD3TaCtSh3iioC6DUW1H")
-
-TRON_API = f"https://api.trongrid.io/v1/accounts/{TRX_ADDRESS}/transactions?limit=10"
-USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+TRX_ADDRESS = "TDy4vHiBx9o6zwqD3TaCtSh3iioC6DUW1H"
+API = f"https://api.trongrid.io/v1/accounts/{TRX_ADDRESS}/transactions?limit=10"
 
 last_tx = None
 
-# ================= TRX MONITOR =================
+# ================= TRON LISTENER =================
 
 async def tron_listener(app):
     global last_tx
@@ -24,7 +21,7 @@ async def tron_listener(app):
 
     while True:
         try:
-            r = requests.get(TRON_API, timeout=10)
+            r = requests.get(API, timeout=10)
             txs = r.json().get("data", [])
 
             if txs:
@@ -40,92 +37,36 @@ async def tron_listener(app):
                             break
 
                         txid = tx["txID"]
-                        raw = tx["raw_data"]["contract"][0]
-                        ctype = raw["type"]
 
-                        # ================= TRX =================
-                        if ctype == "TransferContract":
-                            v = raw["parameter"]["value"]
-
-                            amount = v["amount"] / 1_000_000
-                            to_addr = v["to_address"]
-                            from_addr = v["owner_address"]
-
-                            chat_msg = None
-
-                            if TRX_ADDRESS in to_addr:
-                                chat_msg = f"""📥 TRX GELDİ
-Miktar: {amount} TRX
-💸 Rest gelsin paralar gelsin paralar
-
-TxID:
+                        for chat_id in list(app.chat_data.keys()):
+                            await app.bot.send_message(
+                                chat_id=chat_id,
+                                text=f"""📡 YENİ İŞLEM
 https://tronscan.org/#/transaction/{txid}"""
-
-                            elif TRX_ADDRESS in from_addr:
-                                chat_msg = f"""📤 TRX GİTTİ
-Miktar: {amount} TRX
-
-TxID:
-https://tronscan.org/#/transaction/{txid}"""
-
-                            if chat_msg:
-                                # tüm aktif chatlere gönder
-                                for chat_id in list(app.chat_data.keys()):
-                                    await app.bot.send_message(chat_id=chat_id, text=chat_msg)
-
-                        # ================= USDT =================
-                        elif ctype == "TriggerSmartContract":
-                            v = raw["parameter"]["value"]
-                            contract = v.get("contract_address")
-
-                            if contract == USDT_CONTRACT:
-                                data = v.get("data", "")
-
-                                try:
-                                    amount = int(data[-64:], 16) / 1_000_000
-                                except:
-                                    amount = 0
-
-                                msg = f"""💵 USDT GELDİ
-Miktar: {amount} USDT
-💸 Rest gelsin paralar gelsin paralar
-
-TxID:
-https://tronscan.org/#/transaction/{txid}"""
-
-                                for chat_id in list(app.chat_data.keys()):
-                                    await app.bot.send_message(chat_id=chat_id, text=msg)
+                            )
 
                     last_tx = latest
 
             await asyncio.sleep(8)
 
         except Exception as e:
-            print("TRON ERROR:", e)
+            print("ERROR:", e)
             await asyncio.sleep(5)
+
+# ================= POST INIT (DOĞRU YER) =================
+
+async def post_init(app):
+    app.create_task(tron_listener(app))
 
 # ================= COMMANDS =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
-    # chat kaydet (grubu otomatik öğrenmek için)
+    # chat kaydet (grup sistemi)
     context.application.chat_data[chat_id] = True
 
-    await update.message.reply_text(
-        "🤖 Bot aktif\n📡 TRX + USDT takip başladı"
-    )
-
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "/start - botu aktif eder\n"
-        "/help - yardım"
-    )
-
-# ================= INIT =================
-
-async def post_init(app):
-    app.create_task(tron_listener(app))
+    await update.message.reply_text("🤖 Bot aktif")
 
 # ================= MAIN =================
 
@@ -133,7 +74,6 @@ def main():
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_cmd))
 
     app.run_polling()
 
