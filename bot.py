@@ -1,25 +1,26 @@
+import os
 import asyncio
 import requests
-from telegram import Bot
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ================= CONFIG =================
 
-BOT_TOKEN = "BOT_TOKEN"
-ADMIN_ID = 123456789  # Telegram user id
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-ADDRESS = "TDy4vHiBx9o6zwqD3TaCtSh3iioC6DUW1H"
+TRX_ADDRESS = os.getenv("TRX_ADDRESS", "TDy4vHiBx9o6zwqD3TaCtSh3iioC6DUW1H")
 
-TRON_API = f"https://api.trongrid.io/v1/accounts/{ADDRESS}/transactions?limit=10"
+TRON_API = f"https://api.trongrid.io/v1/accounts/{TRX_ADDRESS}/transactions?limit=10"
 USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
-
-bot = Bot(token=BOT_TOKEN)
 
 last_tx = None
 
-# ================= LOOP =================
+# ================= TRX MONITOR =================
 
-async def run():
+async def tron_listener(app):
     global last_tx
+
+    await asyncio.sleep(5)
 
     while True:
         try:
@@ -50,28 +51,27 @@ async def run():
                             to_addr = v["to_address"]
                             from_addr = v["owner_address"]
 
-                            # GELEN
-                            if ADDRESS in to_addr:
-                                await bot.send_message(
-                                    ADMIN_ID,
-                                    f"""📥 TRX GELDİ
+                            chat_msg = None
+
+                            if TRX_ADDRESS in to_addr:
+                                chat_msg = f"""📥 TRX GELDİ
 Miktar: {amount} TRX
 💸 Rest gelsin paralar gelsin paralar
 
-TxID: {txid}
+TxID:
 https://tronscan.org/#/transaction/{txid}"""
-                                )
 
-                            # GİDEN
-                            elif ADDRESS in from_addr:
-                                await bot.send_message(
-                                    ADMIN_ID,
-                                    f"""📤 TRX GİTTİ
+                            elif TRX_ADDRESS in from_addr:
+                                chat_msg = f"""📤 TRX GİTTİ
 Miktar: {amount} TRX
 
-TxID: {txid}
+TxID:
 https://tronscan.org/#/transaction/{txid}"""
-                                )
+
+                            if chat_msg:
+                                # tüm aktif chatlere gönder
+                                for chat_id in list(app.chat_data.keys()):
+                                    await app.bot.send_message(chat_id=chat_id, text=chat_msg)
 
                         # ================= USDT =================
                         elif ctype == "TriggerSmartContract":
@@ -86,25 +86,56 @@ https://tronscan.org/#/transaction/{txid}"""
                                 except:
                                     amount = 0
 
-                                await bot.send_message(
-                                    ADMIN_ID,
-                                    f"""💵 USDT GELDİ
+                                msg = f"""💵 USDT GELDİ
 Miktar: {amount} USDT
 💸 Rest gelsin paralar gelsin paralar
 
-TxID: {txid}
+TxID:
 https://tronscan.org/#/transaction/{txid}"""
-                                )
+
+                                for chat_id in list(app.chat_data.keys()):
+                                    await app.bot.send_message(chat_id=chat_id, text=msg)
 
                     last_tx = latest
 
             await asyncio.sleep(8)
 
         except Exception as e:
-            print("Hata:", e)
+            print("TRON ERROR:", e)
             await asyncio.sleep(5)
 
-# ================= START =================
+# ================= COMMANDS =================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+
+    # chat kaydet (grubu otomatik öğrenmek için)
+    context.application.chat_data[chat_id] = True
+
+    await update.message.reply_text(
+        "🤖 Bot aktif\n📡 TRX + USDT takip başladı"
+    )
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "/start - botu aktif eder\n"
+        "/help - yardım"
+    )
+
+# ================= INIT =================
+
+async def post_init(app):
+    app.create_task(tron_listener(app))
+
+# ================= MAIN =================
+
+def main():
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_cmd))
+
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    main()
