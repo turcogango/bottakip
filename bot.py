@@ -1,11 +1,13 @@
 import asyncio
 import requests
+import os
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ================= CONFIG =================
 
-BOT_TOKEN = "BOT_TOKEN"
+# 🔥 FIX: TOKEN artık env'den okunmalı
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 TRX_ADDRESS = "TDy4vHiBx9o6zwqD3TaCtSh3iioC6DUW1H"
 API = f"https://api.trongrid.io/v1/accounts/{TRX_ADDRESS}/transactions?limit=10"
@@ -53,9 +55,10 @@ https://tronscan.org/#/transaction/{txid}"""
             print("ERROR:", e)
             await asyncio.sleep(5)
 
-# ================= POST INIT (DOĞRU YER) =================
+# ================= POST INIT =================
 
 async def post_init(app):
+    # safer task start
     app.create_task(tron_listener(app))
 
 # ================= COMMANDS =================
@@ -63,7 +66,7 @@ async def post_init(app):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
-    # chat kaydet (grup sistemi)
+    # chat register (grup sistemi)
     context.application.chat_data[chat_id] = True
 
     await update.message.reply_text("🤖 Bot aktif")
@@ -71,6 +74,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ================= MAIN =================
 
 def main():
+    # 🔥 FIX: token kontrolü
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN bulunamadı (Railway Variables kontrol et)")
+
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start))
