@@ -7,28 +7,73 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 # ================= CONFIG =================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADDRESS = "TDy4vHiBx9o6zwqD3TaCtSh3iioC6DUW1H"
 
-TRX_ADDRESS = "TDy4vHiBx9o6zwqD3TaCtSh3iioC6DUW1H"
-API = f"https://api.trongrid.io/v1/accounts/{TRX_ADDRESS}/transactions?limit=10"
+API = f"https://api.trongrid.io/v1/accounts/{ADDRESS}/transactions?limit=20"
 
 last_tx = None
-
-# 🔥 FIX: chat listesi (mappingproxy hatası yerine)
 ACTIVE_CHATS = set()
+
+USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 
 # ================= FORMAT =================
 
 def format_msg(direction, amount, symbol, txid):
     return f"""
-💸 {direction} İŞLEM
+💸 {symbol} {direction}
 
-Miktar: {amount} {symbol}
+Miktar: {amount}
 
 💸 Rest gelsin paralar gelsin paralar
 
 TxID:
 https://tronscan.org/#/transaction/{txid}
 """
+
+# ================= PARSE TRX =================
+
+def parse_trx(tx):
+    try:
+        c = tx["raw_data"]["contract"][0]
+        v = c["parameter"]["value"]
+
+        from_addr = v.get("owner_address", "")
+        to_addr = v.get("to_address", "")
+        amount = v.get("amount", 0) / 1_000_000
+
+        direction = "GELDİ" if ADDRESS in to_addr else "GİTTİ"
+
+        return direction, round(amount, 6), "TRX", tx["txID"]
+    except:
+        return None
+
+# ================= PARSE USDT =================
+
+def parse_usdt(tx):
+    try:
+        c = tx["raw_data"]["contract"][0]
+
+        if c["type"] != "TriggerSmartContract":
+            return None
+
+        contract = c["parameter"]["value"].get("contract_address")
+
+        if contract != USDT_CONTRACT:
+            return None
+
+        data = c["parameter"]["value"].get("data", "")
+
+        # basit decode (transfer amount)
+        if data:
+            amount_hex = data[-64:]
+            amount = int(amount_hex, 16) / 1_000_000
+
+            return "GELDİ", round(amount, 2), "USDT", tx["txID"]
+
+    except:
+        pass
+
+    return None
 
 # ================= LISTENER =================
 
@@ -51,42 +96,45 @@ async def tron_listener(app):
                 elif latest != last_tx:
 
                     new_txs = []
-
                     for tx in txs:
                         if tx["txID"] == last_tx:
                             break
                         new_txs.append(tx)
 
                     for tx in reversed(new_txs):
-                        txid = tx["txID"]
 
-                        msg = format_msg("TX", "Bilinmiyor", "", txid)
+                        result = parse_trx(tx) or parse_usdt(tx)
+
+                        if not result:
+                            continue
+
+                        direction, amount, symbol, txid = result
+
+                        msg = format_msg(direction, amount, symbol, txid)
 
                         for chat_id in ACTIVE_CHATS:
                             await app.bot.send_message(chat_id=chat_id, text=msg)
 
                     last_tx = latest
 
-            await asyncio.sleep(6)
+            await asyncio.sleep(5)
 
         except Exception as e:
             print("ERROR:", e)
             await asyncio.sleep(5)
 
+# ================= START =================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    ACTIVE_CHATS.add(chat_id)
+
+    await update.message.reply_text("🤖 Pro TRX Tracker aktif")
+
 # ================= POST INIT =================
 
 async def post_init(app):
     asyncio.create_task(tron_listener(app))
-
-# ================= COMMAND =================
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-
-    # 🔥 FIX: artık chat_data yok
-    ACTIVE_CHATS.add(chat_id)
-
-    await update.message.reply_text("🤖 Bot aktif")
 
 # ================= MAIN =================
 
