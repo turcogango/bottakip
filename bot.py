@@ -16,6 +16,9 @@ ACTIVE_CHATS = set()
 
 USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 
+MIN_TRX = 10
+MIN_USDT = 10
+
 # ================= FORMAT =================
 
 def format_msg(direction, amount, symbol, txid):
@@ -23,8 +26,6 @@ def format_msg(direction, amount, symbol, txid):
 💸 {symbol} {direction}
 
 Miktar: {amount}
-
-💸 Rest gelsin paralar gelsin paralar
 
 TxID:
 https://tronscan.org/#/transaction/{txid}
@@ -41,7 +42,15 @@ def parse_trx(tx):
         to_addr = v.get("to_address", "")
         amount = v.get("amount", 0) / 1_000_000
 
-        direction = "GELDİ" if ADDRESS in to_addr else "GİTTİ"
+        if amount < MIN_TRX:
+            return None
+
+        if ADDRESS in to_addr:
+            direction = "GELDİ"
+        elif ADDRESS in from_addr:
+            direction = "GİTTİ"
+        else:
+            return None
 
         return direction, round(amount, 6), "TRX", tx["txID"]
     except:
@@ -56,24 +65,40 @@ def parse_usdt(tx):
         if c["type"] != "TriggerSmartContract":
             return None
 
-        contract = c["parameter"]["value"].get("contract_address")
+        v = c["parameter"]["value"]
 
+        contract = v.get("contract_address")
         if contract != USDT_CONTRACT:
             return None
 
-        data = c["parameter"]["value"].get("data", "")
+        data = v.get("data", "")
+        if not data:
+            return None
 
-        # basit decode (transfer amount)
-        if data:
-            amount_hex = data[-64:]
-            amount = int(amount_hex, 16) / 1_000_000
+        # transfer method id
+        if not data.startswith("a9059cbb"):
+            return None
 
-            return "GELDİ", round(amount, 2), "USDT", tx["txID"]
+        to_hex = data[8:72]
+        amount_hex = data[72:136]
+
+        amount = int(amount_hex, 16) / 1_000_000
+
+        if amount < MIN_USDT:
+            return None
+
+        # adres kontrol (basit)
+        addr_hex = ADDRESS.lower().replace("41", "")
+
+        if addr_hex in to_hex.lower():
+            direction = "GELDİ"
+        else:
+            direction = "GİTTİ"
+
+        return direction, round(amount, 2), "USDT", tx["txID"]
 
     except:
-        pass
-
-    return None
+        return None
 
 # ================= LISTENER =================
 
@@ -113,7 +138,11 @@ async def tron_listener(app):
                         msg = format_msg(direction, amount, symbol, txid)
 
                         for chat_id in ACTIVE_CHATS:
-                            await app.bot.send_message(chat_id=chat_id, text=msg)
+                            await app.bot.send_message(
+                                chat_id=chat_id,
+                                text=msg,
+                                disable_web_page_preview=True
+                            )
 
                     last_tx = latest
 
@@ -129,7 +158,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     ACTIVE_CHATS.add(chat_id)
 
-    await update.message.reply_text("🤖 Pro TRX Tracker aktif")
+    await update.message.reply_text("🔔 TRX/USDT Tracker aktif (10+ filtreli, sessiz)")
 
 # ================= POST INIT =================
 
