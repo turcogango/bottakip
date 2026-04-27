@@ -11,13 +11,12 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADDRESS = "TDy4vHiBx9o6zwqD3TaCtSh3iioC6DUW1H"
 
 TRC20_API = f"https://api.trongrid.io/v1/accounts/{ADDRESS}/transactions/trc20?limit=30"
-TRX_API = f"https://api.trongrid.io/v1/accounts/{ADDRESS}/transactions?limit=30&only_confirmed=true"
+TRX_API = f"https://api.trongrid.io/v1/accounts/{ADDRESS}/transactions?limit=30"
 TX_INFO_API = "https://api.trongrid.io/wallet/gettransactioninfobyid"
 PRICE_API = "https://api.coingecko.com/api/v3/simple/price?ids=tron,tether&vs_currencies=try"
 
 ACTIVE_CHATS = set()
 seen_tx = set()
-start_ts_ms = int(time.time() * 1000)
 
 # fiyat cache
 _price_cache = {"ts": 0, "trx": 0.0, "usdt": 0.0}
@@ -62,7 +61,6 @@ def get_fee(txid):
 # ================= FETCH =================
 
 def fetch_trc20():
-    """TRC20 transfer eventlerini döner: list of (txid, ts, symbol, amount, from, to)"""
     out = []
     try:
         data = requests.get(TRC20_API, timeout=10).json().get("data", [])
@@ -88,32 +86,39 @@ def fetch_trc20():
     return out
 
 def fetch_trx():
-    """Native TRX transferleri."""
     out = []
     try:
         data = requests.get(TRX_API, timeout=10).json().get("data", [])
+
         for tx in data:
             try:
                 c = tx["raw_data"]["contract"][0]
-                if c["type"] != "TransferContract":
-                    continue
                 v = c["parameter"]["value"]
+
                 amount = v.get("amount", 0) / 1_000_000
                 if amount <= 0:
                     continue
+
+                from_addr = v.get("owner_address_base58") or v.get("owner_address", "")
+                to_addr = v.get("to_address_base58") or v.get("to_address", "")
+
                 out.append({
                     "txid": tx["txID"],
                     "ts": tx.get("block_timestamp", 0),
                     "symbol": "TRX",
                     "amount": amount,
-                    "from": v.get("owner_address_base58") or v.get("owner_address", ""),
-                    "to": v.get("to_address_base58") or v.get("to_address", ""),
+                    "from": from_addr,
+                    "to": to_addr,
                     "kind": "trx",
                 })
-            except Exception:
+
+            except Exception as e:
+                print("TRX PARSE ERROR:", e)
                 continue
+
     except Exception as e:
         print("TRX ERROR:", e)
+
     return out
 
 # ================= GROUP & CLASSIFY =================
@@ -125,13 +130,14 @@ def group_by_tx(events):
     return groups
 
 def classify(txid, events):
-    """Bir tx içindeki tüm transferlerden yön ve swap durumunu çıkarır."""
-    incoming = {}  # symbol -> amount
+    incoming = {}
     outgoing = {}
     ts = 0
+
     for e in events:
         ts = max(ts, e["ts"])
         sym = e["symbol"]
+
         if e["to"] == ADDRESS:
             incoming[sym] = incoming.get(sym, 0) + e["amount"]
         elif e["from"] == ADDRESS:
@@ -197,32 +203,31 @@ def build_message(txid, info):
 async def tron_listener(app):
     global seen_tx
 
-    # ilk taramada mevcut tx'leri "görüldü" işaretle, sadece yenilerini bildir
     initial = fetch_trc20() + fetch_trx()
     for e in initial:
         seen_tx.add(e["txid"])
-    print(f"Başlangıç: {len(seen_tx)} mevcut tx atlandı.")
+
+    print(f"Başlangıç: {len(seen_tx)} tx atlandı.")
 
     while True:
         try:
             events = fetch_trc20() + fetch_trx()
-            # sadece başlangıçtan sonraki ve görülmemiş olanlar
-            new_events = [
-                e for e in events
-                if e["txid"] not in seen_tx and e["ts"] >= start_ts_ms
-            ]
+
+            new_events = [e for e in events if e["txid"] not in seen_tx]
 
             if new_events:
                 groups = group_by_tx(new_events)
-                # eski → yeni sırala
                 ordered = sorted(groups.items(), key=lambda kv: max(x["ts"] for x in kv[1]))
 
                 for txid, evs in ordered:
                     info = classify(txid, evs)
                     seen_tx.add(txid)
+
                     if not info:
                         continue
+
                     msg = build_message(txid, info)
+
                     for chat_id in ACTIVE_CHATS:
                         try:
                             await app.bot.send_message(chat_id=chat_id, text=msg, disable_web_page_preview=True)
@@ -240,10 +245,11 @@ async def tron_listener(app):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ACTIVE_CHATS.add(update.effective_chat.id)
     trx_try, usdt_try = get_prices()
+
     await update.message.reply_text(
-        "🤖 Pro TRX Tracker aktif\n"
+        "🤖 TRX Tracker aktif\n"
         f"Adres: {ADDRESS}\n"
-        f"TRX: {fmt_try(trx_try)}  |  USDT: {fmt_try(usdt_try)}"
+        f"TRX: {fmt_try(trx_try)} | USDT: {fmt_try(usdt_try)}"
     )
 
 async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
